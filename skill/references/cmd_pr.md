@@ -1,6 +1,6 @@
 # `/spec pr` — Address PR Feedback
 
-Address review feedback from a GitHub pull request. This command reuses the standard implement loop (coding agent → CR → commit) but enters at the CR feedback stage, with feedback sourced from GitHub instead of the local CR agent.
+Address review feedback from a GitHub pull request. Triage every unresolved comment with the user before any code changes. After they confirm, this command reuses the standard implement loop (coding agent → CR → commit) for the approved comments, with feedback sourced from GitHub instead of the local CR agent. Deferred comments become GitHub issues. Pushed-back comments get a reply and no code change.
 
 ## Manager Role
 
@@ -8,6 +8,8 @@ Address review feedback from a GitHub pull request. This command reuses the stan
 
 The manager's responsibilities:
 - Discover the PR and fetch feedback
+- Triage every comment and wait for the user to confirm the plan
+- Open a GitHub issue for each deferred comment
 - Spawn coding sub-agents and CR sub-agents at the right times
 - Route CR feedback back to the coding agent
 - Verify that commits actually landed (via `git status`)
@@ -26,13 +28,15 @@ Use the label **"PR Feedback Progress"** for the progress block. The full step l
 ```
 - Step 0a: Find PR
 - Step 0b: Fetch comments
+- Step 0c: Triage and confirm
+- Step 0d: Deferral issues and early replies
 - Step 1: Coding
 - Step 1b: Attestation
 - Step 1c: UI signoff (if applicable)
 - Step 2: Code review
 - Step 3: Commit
 - Step 4: Verify and push
-- Step 5: Reply to PR comments
+- Step 5: Reply to implemented comments
 - Step 6: Summary
 ```
 
@@ -40,19 +44,42 @@ Use the label **"PR Feedback Progress"** for the progress block. The full step l
 
 ```
 /spec pr
+/spec pr <pr-url-or-number>
 ```
 
-No arguments needed — the command discovers the PR from the current branch.
+An argument is optional. A GitHub pull request URL or a PR number selects that PR. With no argument, the command discovers the PR from the current branch.
 
 ## Step 0a: Find the PR
 
-Run `gh pr view --json number,url,title,headRefName` to find the PR for the current branch.
+If the user passed a URL or number, run:
+
+```bash
+gh pr view <pr-url-or-number> --json number,url,title,headRefName
+```
+
+If they did not, run:
+
+```bash
+gh pr view --json number,url,title,headRefName
+```
 
 If no PR is found:
 
-> No open PR found for the current branch (`[branch name]`). Push your branch and open a PR first.
+> No open PR found. Pass a PR URL or number, or push the current branch (`[branch name]`) and open a PR first.
 
-Also run `gh repo view --json owner,name` to extract `{owner}` and `{repo}` for subsequent API calls.
+A PR number resolves in the current repo. If the user passed a URL, the `owner/repo` in that URL must match `gh repo view --json nameWithOwner`. If it does not, stop:
+
+> PR #[number] is in `[owner/repo]`, and this checkout is `[nameWithOwner]`. Open the command from that repo.
+
+Do not compare `headRepository`. That is the head branch's repo, and it differs for pull requests opened from a fork.
+
+Before any later coding step, the checkout must be the PR's head branch.
+
+- If `git branch --show-current` already matches `headRefName`, continue.
+- If the working tree is clean, check out that branch with `gh pr checkout {number}`.
+- If the working tree is dirty, stop and tell the user. Do not check out over local changes.
+
+Also extract `{owner}` and `{repo}` for subsequent API calls.
 
 ## Step 0b: Fetch PR Comments
 
@@ -72,6 +99,7 @@ gh api graphql -f query='
               nodes {
                 id
                 databaseId
+                url
                 author { login }
                 body
                 path
@@ -109,20 +137,30 @@ URL: [pr_url]
 
 ### Review Comments (line-level)
 
-**[file]:[line]** — @[author] (comment_id: [id])
+**[file]:[line]** — @[author] (comment_id: [databaseId])
+Link: [url]
 > [comment body]
 
-**[file]:[line]** — @[author] (comment_id: [id])
+**[file]:[line]** — @[author] (comment_id: [databaseId])
+Link: [url]
 > [comment body]
 
 ### General Comments
 
 @[author] (comment_id: [id])
+Link: [html_url]
 > [comment body]
 </pr_feedback>
 ```
 
-Include the `comment_id` for each comment — the manager needs these later to post replies.
+`comment_id` is the numeric REST id: `databaseId` for review comments, `id` for issue comments. Reply APIs take that id, not the GraphQL node id.
+
+`Link` is the comment's HTML URL (`url` from GraphQL, `html_url` from the issue-comments API). If the API omits it, build it:
+
+- Review comment: `https://github.com/{owner}/{repo}/pull/{number}#discussion_r{databaseId}`
+- Issue comment: `https://github.com/{owner}/{repo}/pull/{number}#issuecomment-{id}`
+
+Keep the link. Triage, issues, and replies all use it.
 
 ### Context Loading
 
@@ -135,17 +173,137 @@ Check if there's an active project or task:
 
 This is informational — the command works regardless of active project state.
 
+## Step 0c: Triage and Confirm
+
+Classify every unresolved comment into exactly one bucket. Do this before any code, issue, or reply.
+
+- **Implement** — fix it in this run.
+- **Defer** — do not fix it in this run. Use this when the comment is a lot of work or belongs in a follow-up. The default action is to open a GitHub issue. Include a concise reason.
+- **Push back** — do not fix it, and do not open an issue. Use this when you disagree with the comment, or when implementing it would change behavior significantly. Include a concise reason.
+
+Show the triage in this shape. Every decision has a link to the original comment. Defer and push back include the reason. Keep empty buckets visible.
+
+```
+## PR #[number] triage: [title]
+
+[pr_url]
+
+### Implement ([N])
+
+- [one-line summary] — [comment link]
+
+### Defer ([N])
+
+Each deferred item opens a GitHub issue unless you say otherwise.
+
+- [one-line summary] — [comment link]
+  Why: [concise reason]
+
+### Push back ([N])
+
+- [one-line summary] — [comment link]
+  Why: [concise reason]
+
+Is everything good to go?
+```
+
+Stop here. Do not code, open issues, reply, commit, or push until the user confirms.
+
+- A plain confirmation ("yes", "good to go", "lgtm") locks the plan.
+- A confirmation that also corrects the plan ("yes, but move X to defer", "don't open an issue for Y") locks the corrected plan. Apply the correction and proceed. Do not ask again.
+- A correction with no confirmation ("move X to defer") updates the lists. Show the updated triage and ask again.
+
+The user can also edit a reason, or tell you not to open an issue for a specific deferred comment. Honor that when the plan locks.
+
+## Step 0d: Deferral Issues and Early Replies
+
+Run this only after the user confirms. Skip it when nothing was deferred or pushed back.
+
+**Issues.** For each deferred comment whose action is still "open a GitHub issue":
+
+```bash
+gh issue create --title "Follow-up from PR #[number]: [one-line summary]" --body "$(cat <<'EOF'
+Deferred from PR #[number] while addressing review feedback.
+
+**Comment:** [comment link]
+**Author:** @[author]
+**Where:** [file:line, or "general comment"]
+
+> [comment body]
+
+**Why deferred:** [concise reason]
+
+PR: [pr_url]
+EOF
+)"
+```
+
+Record each issue URL. If issue creation fails, stop and tell the user. Do not start coding with an untracked deferral.
+
+**Replies.** Reply now on deferred and pushed-back threads, before coding starts, so those decisions are on the PR even if implementation later hits a roadblock.
+
+Deferred, with an issue:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies \
+  -f body="$(cat <<'EOF'
+Deferred — tracked in [issue url].
+
+[concise why]
+
+---
+*Deferred via `/spec pr`*
+EOF
+)"
+```
+
+Deferred, when the user said not to open an issue:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies \
+  -f body="$(cat <<'EOF'
+Deferred.
+
+[concise why]
+
+---
+*Deferred via `/spec pr`*
+EOF
+)"
+```
+
+Pushed back:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies \
+  -f body="$(cat <<'EOF'
+Not implementing this.
+
+[concise why]
+
+---
+*Reviewed via `/spec pr`*
+EOF
+)"
+```
+
+For a general issue comment, post a new issue comment on the PR instead of a review-thread reply (same shape as Step 5). A failed reply does not block coding. Report it in the Step 6 summary and continue.
+
+If the confirmed plan has nothing to implement, skip Steps 1 through 5 and go to Step 6.
+
 ## Implementation Flow
 
 **PROCESS GATE:** Before proceeding to Step 1, verify:
-1. Pre-checks are complete (Steps 0a and 0b are done)
-2. You are about to output your first progress block
-3. You have NOT written any code or edited any project files yourself
-4. Your next action after the progress block is spawning a sub-agent
+1. Steps 0a through 0c are done, and the user confirmed the triage
+2. Step 0d is done for every deferred or pushed-back comment (or there were none)
+3. The confirmed plan has at least one Implement item. If it does not, Step 0d already sent you to Step 6
+4. You are about to output your first progress block
+5. You have NOT written any code or edited any project files yourself
+6. Your next action after the progress block is spawning a sub-agent
 
 If any of these are false, stop and correct course.
 
-**AUTONOMOUS FLOW: Once Step 1 begins, drive the entire flow to completion without stopping for user input. The only exceptions are: escalation (roadblock from coding agent), and UI signoff (Step 1c) when the changes include significant UI changes.**
+**AUTONOMOUS FLOW: Once the user has confirmed the triage, drive the rest of the flow to completion without stopping for user input. The only exceptions are: escalation (roadblock from coding agent), and UI signoff (Step 1c) when the changes include significant UI changes.**
 
 ### Step 1: Spawn Coding Agent
 
@@ -238,9 +396,9 @@ Once verified:
 1. Run `git rev-parse HEAD` to capture the commit hash
 2. Run `git push` to push the changes
 
-### Step 5: Reply to PR Comments
+### Step 5: Reply to Implemented Comments
 
-For each piece of PR feedback that was addressed, use `gh` to reply on the original comment thread.
+Deferred and pushed-back threads were already answered in Step 0d. Reply here only for comments in the confirmed Implement set.
 
 **For review comments (line-level):**
 
@@ -274,24 +432,9 @@ EOF
 )"
 ```
 
-**For feedback that was intentionally NOT implemented:**
-
-```bash
-gh api repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies \
-  -f body="$(cat <<'EOF'
-Reviewed but not implemented.
-
-[Explanation of why — technical rationale, conflicts with spec, etc.]
-
----
-*Reviewed by AI coding agent via `/spec pr`*
-EOF
-)"
-```
-
 **Important:**
 - Do NOT use `gh` to resolve comment threads — that's reserved for humans
-- Reply to every comment that was in the feedback set, whether implemented or not
+- Step 0d replies to deferred and pushed-back comments. This step replies to implemented ones. Every comment from the triage ends up with a reply.
 - Keep reply descriptions concise but specific
 
 ### Step 6: Present Summary
@@ -303,11 +446,14 @@ Show a summary to the user:
 > **Commit:** [hash] — [commit message]
 > **Push:** ✓ pushed to [branch]
 >
-> **Comments addressed:** [N]
-> - [N] fixed
-> - [N] pushed back (not implemented)
+> **Triage:** [N] implement, [N] defer, [N] push back
+> - Fixed: [N]
+> - Deferred: [N] ([issue links, or "no issue" when the user opted out])
+> - Pushed back: [N]
 >
 > **Replies posted:** [N] / [total]
+>
+> When nothing was implemented, omit the commit and push lines and say that the confirmed plan had no code changes.
 
 ## Prompt Templates
 
@@ -318,14 +464,16 @@ These are the exact prompts the manager sends to sub-agents. Use them verbatim, 
 ```
 You are a coding agent addressing PR feedback from GitHub.
 
+The user already confirmed this set. Implement every comment in it. Deferred and pushed-back comments are out of scope.
+
 [IF active project]: **Project specs:** [specs/projects/PROJECT_NAME/]
 [IF active task]: **Task file:** [.specs_skill_state/tasks/SLUG.md]
 
 Read `references/pr_coding_prompt.md` for your full instructions. Follow them precisely.
 
-[The formatted <pr_feedback> block from the manager]
+[The formatted <pr_feedback> block — confirmed Implement comments only]
 
-Return a short summary of what you changed (and what you pushed back on, if anything) when ready for code review.
+Return a short summary of what you changed when ready for code review. If an item conflicts with the spec, would change behavior beyond the triage, or is much larger than it looked, return a roadblock instead of skipping it.
 ```
 
 ### CR Feedback Prompt (resume coding agent)
@@ -355,9 +503,13 @@ Review code changes addressing PR feedback.
 [IF active project]: The project is at [specs/projects/PROJECT_NAME/].
 [IF active task]: The task is described in [.specs_skill_state/tasks/SLUG.md].
 
-The coding agent was addressing external PR feedback. Here is the original feedback for context on what was being addressed:
+The coding agent was addressing external PR feedback the user already confirmed. Here is that implement set:
 
-[The formatted <pr_feedback> block from the manager]
+[The formatted <pr_feedback> block — confirmed Implement comments only]
+
+These comments were deferred or pushed back. They are out of scope. Do not treat them as missing work:
+
+[One line per deferred or pushed-back comment: summary — link — bucket]
 
 Read `references/cr_agent_prompt.md` for your full review instructions. Follow them precisely.
 ```
