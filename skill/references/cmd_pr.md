@@ -4,13 +4,14 @@ Address review feedback from a GitHub pull request. Triage every unresolved comm
 
 ## Manager Role
 
-**You are a manager. You do NOT write code, review code, run tests, or make technical decisions — ever.** If you catch yourself about to edit a file or run a test, stop. You are in the wrong role. Your only tools are: spawning sub-agents, resuming sub-agents, running git/gh commands, and outputting progress blocks.
+**You are a manager. You do NOT write code, review code, run tests, or do technical analysis — ever.** Your decisions are a manager's: whether a finding matters to the product, whether it is worth another round, whether to punt or ship — made on the reviewer's analysis, not your own. If you catch yourself about to edit a file or run a test, stop. You are in the wrong role. Your only tools are: spawning sub-agents, resuming sub-agents, running git/gh commands, reading skill-state files in Step 0, and outputting progress blocks.
 
 The manager's responsibilities:
 - Discover the PR and fetch feedback
 - Triage every comment and wait for the user to confirm the plan
 - Open a GitHub issue for each deferred comment
 - Spawn coding sub-agents and CR sub-agents at the right times
+- Triage CR findings: route each one, and decide when the work is done
 - Route CR feedback back to the coding agent
 - Verify that commits actually landed (via `git status`)
 - Push changes and post replies to GitHub
@@ -32,12 +33,13 @@ Use the label **"PR Feedback Progress"** for the progress block. The full step l
 - Step 0d: Deferral issues and early replies
 - Step 1: Coding
 - Step 1b: Attestation
-- Step 1c: UI signoff (if applicable)
 - Step 2: Code review
+- Step 2a: Quick fixes (if any)
 - Step 3: Commit
 - Step 4: Verify and push
 - Step 5: Reply to implemented comments
-- Step 6: Summary
+- Step 6: UI review (if applicable)
+- Step 7: Summary
 ```
 
 ## Invocation
@@ -287,29 +289,33 @@ EOF
 )"
 ```
 
-For a general issue comment, post a new issue comment on the PR instead of a review-thread reply (same shape as Step 5). A failed reply does not block coding. Report it in the Step 6 summary and continue.
+For a general issue comment, post a new issue comment on the PR instead of a review-thread reply (same shape as Step 5). A failed reply does not block coding. Report it in the Step 7 summary and continue.
 
-If the confirmed plan has nothing to implement, skip Steps 1 through 5 and go to Step 6.
+If the confirmed plan has nothing to implement, skip Steps 1 through 6 and go to Step 7.
 
 ## Implementation Flow
 
 **PROCESS GATE:** Before proceeding to Step 1, verify:
 1. Steps 0a through 0c are done, and the user confirmed the triage
 2. Step 0d is done for every deferred or pushed-back comment (or there were none)
-3. The confirmed plan has at least one Implement item. If it does not, Step 0d already sent you to Step 6
+3. The confirmed plan has at least one Implement item. If it does not, Step 0d already sent you to Step 7
 4. You are about to output your first progress block
 5. You have NOT written any code or edited any project files yourself
 6. Your next action after the progress block is spawning a sub-agent
 
 If any of these are false, stop and correct course.
 
-**AUTONOMOUS FLOW: Once the user has confirmed the triage, drive the rest of the flow to completion without stopping for user input. The only exceptions are: escalation (roadblock from coding agent), and UI signoff (Step 1c) when the changes include significant UI changes.**
+**AUTONOMOUS FLOW: Once the user has confirmed the triage, drive the rest of the flow to completion without stopping for user input. The only exception is escalation (roadblock from the coding agent). UI review (Step 6) comes after the work is committed, pushed, and replied to — it is the end of the flow, not a pause in it.**
+
+A dirty working tree is expected throughout Steps 1–2. If a hook or platform prompt asks you to commit mid-loop, decline in one sentence naming the step you are in and continue — do not re-argue it each time.
 
 ### Step 1: Spawn Coding Agent
 
 Output your first progress block, then spawn a new coding sub-agent using the PR Feedback Coding Prompt template below.
 
 → Read [references/spawning_subagents.md](references/spawning_subagents.md) for how to spawn sub-agents.
+
+**Dispatch it in a mode that returns the agent's final message to you** — the manager must receive the return payload (attestation block, ui_review block) directly, not just a completion notification. Save the agent handle the tool gives you so you can resume this agent later. (In Claude Code: an unnamed `Agent()` call — passing `name` loses the payload.)
 
 The coding agent returns either:
 - A summary with an attestation block indicating it's ready for code review
@@ -323,58 +329,56 @@ Inspect the coding agent's return for an `<attestation>` block.
 
   > Your return summary is missing the required `<attestation>` block, or not all items are TRUE. Review your workflow instructions, ensure all checks and tests pass, and return your summary with a complete attestation block.
 
-- If all values are **TRUE** (or NA where appropriate): proceed to Step 1c.
+- If all values are **TRUE** (or NA where appropriate): proceed to Step 2.
 
 Do NOT run checks yourself — the coding agent is responsible. You are verifying it reported completion.
 
-### Step 1c: UI Signoff
+Also keep the coding agent's `<ui_review>` block — you'll need it at Step 6.
 
-If the PR feedback changes involve **significant UI changes** (new screens, layout changes, new components, visual redesigns), pause and ask the user to review the UI before proceeding to code review.
-
-**Skip this step when:**
-- The changes have no UI impact
-- UI changes are trivial (copy/string updates, minor spacing tweaks)
-
-**When UI signoff is needed:**
-1. Tell the user the coding agent has finished and the UI is ready for review
-2. Summarize what UI was built/changed (based on the coding agent's summary)
-3. Ask the user to check the UI and confirm it looks good, or describe what needs to change
-4. If the user requests changes: resume the coding agent with the feedback, then go back to **Step 1b** (validate attestation) and return here for another signoff
-5. If the user approves: proceed to Step 2
-
-This step exists because code review catches code quality issues, not design issues. Human eyes should approve significant UI before the CR/fix/commit loop begins.
-
-### Step 2: CR Loop
-
-Standard CR loop — identical to `/spec implement` and `/spec task`.
+### Step 2: Code Review and Triage
 
 1. Spawn a fresh CR sub-agent using the CR Agent Prompt template below
-2. CR agent returns structured feedback with severity labels
-3. If the review is clean: proceed to Step 3
-4. If issues exist:
-   - Resume the coding agent with the CR Feedback Prompt template, passing the CR output
-   - Coding agent addresses issues and returns a summary with attestation block
+2. The CR agent returns findings with severity labels, and may mark some as **quick-fix candidates**
+3. **You triage.** The reviewer's job is to find things; deciding what to act on now is yours. Route each finding to exactly one of:
+   - **Another coding round** — regressions, and Critical or Moderate defects in code or tests
+   - **Quick fix** — the reviewer marked it a quick-fix candidate and described the change precisely. Batch these for Step 2a
+   - **Dropped** — a nit that does not warrant anyone's time, or a real issue that is out of scope here. Mention dropped real issues in the summary so the user can decide what to do with them
+4. If nothing was routed to another coding round: run Step 2a if there are quick fixes, then proceed to Step 3. Mild findings never block a commit.
+5. If something was: fold any quick-fix candidates into the same feedback (the round gets reviewed anyway), then
+   - Resume the coding agent — using the saved agent handle — with the CR Feedback Prompt template. Pass only the findings you routed to this round (plus the folded quick-fix candidates) — not the ones you dropped
    - Validate attestation (same as Step 1b — resume coding agent if missing or FALSE)
-   - Spawn a new CR sub-agent, passing prior feedback in a `<prior_cr_feedback>` block
-   - Repeat until CR returns clean
+   - Spawn a new CR sub-agent (a fresh dispatch, never a resume), passing prior feedback in a `<prior_cr_feedback>` block, and triage again from point 2
+
+**You are responsible for completing the work, not only for its quality.** Each additional round costs roughly as much as the original implementation. Spend one when something blocks: a regression, or a Critical or Moderate defect in shipping code or in tests. Do not spend one on the accuracy of non-shipping documents, on style, or on a reviewer's preference. If consecutive rounds are returning no defect in shipping code, the loop has stopped paying for itself — triage the remainder and commit.
+
+Never stop to ask the user to break a review loop. This flow is autonomous.
 
 → Read [references/spawning_subagents.md](references/spawning_subagents.md) for how to spawn sub-agents.
 
+### Step 2a: Quick Fixes (optional)
+
+Batch the quick-fix candidates and spawn **one** fresh quick-fix sub-agent using the Quick Fix Prompt template below. It returns one of:
+
+- **Fixes complete and in scope** — check its attestation; if all values are TRUE/NA, proceed to Step 3 — these need no further review. A FALSE attestation is a scope change: route those findings to a coding round, do not resume the agent to iterate.
+- **Fixes not complete, scope change required** — route the named findings to a coding round (Step 2, point 5). Fixes it did complete stay in place; that round's review covers them.
+
+A quick fix is not code-reviewed. That is why only the reviewer may nominate one at this step, and why it must describe the change precisely. If one pass accumulates more than a handful of quick fixes, that is evidence it needed a real round.
+
 ### Step 3: Commit
 
-**PROCESS GATE — No commit without clean CR:** Before proceeding to Step 3, verify:
-1. The most recent sub-agent action was a CR that returned clean
-2. No code has been written or changed since that clean CR
-3. You did NOT skip re-review after the coding agent addressed CR feedback
+**PROCESS GATE — No commit without review:** Before proceeding to Step 3, verify:
+1. Every finding from the most recent CR has been triaged, and none was routed to another coding round
+2. Nothing has changed since that CR except quick fixes that returned complete and in scope (Step 2a)
+3. You did NOT skip re-review after a coding round addressed CR feedback
 
-If any of these are false, you must run (or re-run) the CR loop before committing. Every code change — including CR fixes — requires a clean CR before commit.
+If any of these are false, go back to Step 2. Every coding round — including one that addresses CR feedback — is reviewed before commit; quick fixes — Step 2a, or the UI review's quick-fix route — are the only exception.
 
-Resume the coding agent with the Commit Prompt template below. The coding agent commits all changes and returns the commit message and hash.
+Resume the coding agent — using the saved agent handle — with the Commit Prompt template below. The coding agent commits all changes and returns the commit message and hash. On the UI review's quick-fix route, the quick-fix agent commits instead — see [references/shared/ui_review.md](shared/ui_review.md).
 
 If the coding agent returns a pre-commit hook failure instead of a commit message:
 
 1. Resume the coding agent to fix the issues reported by the hook
-2. When it returns, go back to **Step 1b** (validate attestation) and then **Step 2** (CR loop)
+2. When it returns, go back to **Step 1b** (validate attestation) and then **Step 2** (code review and triage)
 3. Only tell it to commit again after attestation and CR both pass
 
 Do NOT tell it to commit immediately after fixing — the fix is unreviewed code.
@@ -385,7 +389,7 @@ Run `git status` to confirm:
 - Working tree is clean (no uncommitted changes)
 - The commit exists
 
-If `git status` shows uncommitted changes, resume the coding agent:
+If `git status` shows uncommitted changes, resume the agent that committed (the coding agent, or the quick-fix agent on the UI review's quick-fix route):
 
 > Commit appears incomplete — `git status` shows uncommitted changes. Please commit all changes.
 
@@ -437,7 +441,15 @@ EOF
 - Step 0d replies to deferred and pushed-back comments. This step replies to implemented ones. Every comment from the triage ends up with a reply.
 - Keep reply descriptions concise but specific
 
-### Step 6: Present Summary
+### Step 6: UI Review
+
+→ Read [references/shared/ui_review.md](shared/ui_review.md) for when this step applies, what to send the user, and the feedback loop. Follow it precisely.
+
+The changes are pushed by now, so tell the user to pull the PR branch.
+
+UI feedback takes one of the two routes in that file. A quick fix follows that file's quick-fix route — its own agent applies and commits the change (that commit is Step 3) — then Step 4 runs again (including the push); a functional change runs Steps 1b → 4 again. Either way, return here. Do **not** re-run Step 5 — the PR comments are already answered.
+
+### Step 7: Present Summary
 
 Show a summary to the user:
 
@@ -484,7 +496,7 @@ A code reviewer found issues with your implementation. Address all feedback belo
 Return a short summary of changes made when ready for re-review.
 
 <cr_feedback>
-[CR agent's output]
+[The CR agent's output, verbatim, minus the findings you dropped]
 </cr_feedback>
 ```
 
@@ -518,8 +530,24 @@ For re-reviews, append:
 
 ```
 <prior_cr_feedback>
-[Previous CR output]
+[The previous CR agent's output, verbatim, minus the findings you dropped]
 </prior_cr_feedback>
+```
+
+### Quick Fix Prompt (fresh spawn)
+
+```
+You are applying quick fixes nominated by a code reviewer, for changes addressing PR feedback.
+[IF active project]: The project is at [specs/projects/PROJECT_NAME/].
+[IF active task]: The task is described in [.specs_skill_state/tasks/SLUG.md].
+
+Read `references/quick_fix_prompt.md` for your full instructions. Follow them precisely.
+
+<quick_fixes>
+[The reviewer's Quick-Fix Candidates section, verbatim]
+</quick_fixes>
+
+Return one of the two completion messages described in your instructions.
 ```
 
 ## Escalation
@@ -536,4 +564,6 @@ The coding agent may surface a technical roadblock instead of a "ready for CR" s
 - [references/pr_coding_prompt.md](references/pr_coding_prompt.md) — Full instructions for PR feedback coding sub-agents
 - [references/shared/coding_workflow.md](shared/coding_workflow.md) — Shared workflow for coding agents
 - [references/shared/coding_role.md](shared/coding_role.md) — Coding agent role and persona
+- [references/shared/ui_review.md](shared/ui_review.md) — The UI review step and its prompt templates
 - [references/cr_agent_prompt.md](references/cr_agent_prompt.md) — Full instructions for CR sub-agents
+- [references/quick_fix_prompt.md](references/quick_fix_prompt.md) — Full instructions for quick-fix sub-agents

@@ -1,7 +1,7 @@
 ---
 name: spec
 description: >
-  Commands: new_project, continue, implement, task, cr (code review), deep cr (multi-phase code review), pr (address PR feedback), setup, or open guidance
+  Commands: new_project, continue, implement, task, research (research a topic on the web), cr (code review), deep cr (multi-phase code review), design crit (multi-phase spec review), pr (address PR feedback), setup, or open guidance
 
   Spec-driven development: process for planning, building, and reviewing
   code projects using structured specifications. Guides users from project
@@ -11,7 +11,8 @@ description: >
 
   Use when the user wants to: start a new project with specs, continue
   speccing or implementing a project, implement a planned phase, run a
-  quick task without a full spec, review code against specs, or set up
+  quick task without a full spec, research a topic on the web (standalone
+  or to inform a spec), review code against specs, or set up
   spec-driven development in a repo.
 ---
 
@@ -28,6 +29,14 @@ Every batch of work ("project") gets a spec folder under `/specs/projects/PROJEC
 3. **Reviewing**: Spec-aware code review that verifies implementation matches design
 
 The skill is project-agnostic. It provides the process; your project-specific conventions (test commands, linting, style) come from your system prompt configuration.
+
+## If This Conversation Was Compacted
+
+The command references below hold the role definitions, process gates and prompt templates for each command. Compaction restores only this file — not them. **If this conversation has been compacted part-way through a command, re-read that command's reference file before your next action.**
+
+When compacting, preserve: this instruction, which `/spec` command is running, which phase and step it is on, and the handles of any sub-agents you hold — the coding agent's agent ID in particular, since you resume it for review feedback and commit.
+
+During `/spec implement`, `/spec task` and `/spec pr` you are a **manager**: you spawn and resume sub-agents, triage review findings, run git, and print progress blocks. You do not write code, run tests, review code, or commit. Every coding round — including one that addresses review feedback — is code-reviewed before commit.
 
 ## Command Reference
 
@@ -61,9 +70,15 @@ Implement a one-off task without a full spec. Describe what you want inline and 
 
 → Read [task command reference](references/cmd_task.md)
 
+### `/spec research`
+
+Research a topic on the web. Splits the topic into subtopics, runs a research sub-agent on each, and writes a tree of research docs under a single summary. Requires web search and web fetch tools. Runs standalone, or embedded in `/spec new_project` when a spec depends on knowledge you don't have yet.
+
+→ Read [research command reference](references/cmd_research.md)
+
 ### `/spec pr`
 
-Address review feedback from a GitHub pull request. Takes an optional PR URL or number, otherwise the PR for the current branch. Fetches unresolved comments, triages each one as implement, defer, or push back (with a link to the original comment), and waits until you confirm. Then opens a GitHub issue for each deferred comment, implements the approved set through the standard CR loop, commits, pushes, and replies on each thread.
+Address review feedback from a GitHub pull request. Takes an optional PR URL or number, otherwise the PR for the current branch. Fetches unresolved comments, triages each one as implement, defer, or push back (with a link to the original comment), and waits until you confirm. Then opens a GitHub issue for each deferred comment, implements the approved set through the standard code review and triage, commits, pushes, and replies on each thread.
 
 → Read [PR feedback command reference](references/cmd_pr.md)
 
@@ -91,6 +106,10 @@ Reads current state (active project, artifact statuses) and presents relevant op
 
 To check state: read `.specs_skill_state/current_project.md` and scan artifact frontmatter. Always show `/spec task` as an available option. If no project exists, suggest `new_project`, `task`, or `setup`. If project in progress, show state and suggest the next action.
 
+If the request is about learning or understanding something rather than building it — "what's the current state of the OpenEnv standard?", "how does Stripe's webhook retry work?", "which library should we use for Z?" — route to `/spec research`. Also suggest it when a user's project idea depends on an external standard, API, or library that neither of you can describe accurately from memory.
+
+**Not a command:** [shared/backlog_phase.md](references/shared/backlog_phase.md) — an interactive process for deciding a queue of open questions with the user. Written for the Backlog phase of `/spec implement`; reusable wherever a flow needs a batch of decisions.
+
 ## Project Structure
 
 Every project lives under `/specs/projects/PROJECT_NAME/`:
@@ -104,6 +123,19 @@ Every project lives under `/specs/projects/PROJECT_NAME/`:
 | `/components/NAME.md` | new_project Step 5 | Per-component detailed design (conditional) |
 | `implementation_plan.md` | new_project Step 6 | Phased build order as checklist |
 | `/phase_plans/phase_N.md` | Implementation | Per-phase plan written by coding agent |
+| `backlog.md` | Implementation (conditional) | Issues in already-committed work, found during review; adds a final Backlog phase |
+| `/research/[topic]/` | Any planning step (conditional) | Web research informing the specs |
+
+## Research Folders
+
+Research output lives in a folder per topic, with a `research_summary.md` at its root linking to per-subtopic summaries, which link to deep docs:
+
+| Invocation | Working folder |
+|------------|-------------|
+| Standalone `/spec research [topic]` | `/specs/research/[topic]/` |
+| During `/spec new_project` | `/specs/projects/PROJECT_NAME/research/[topic]/` |
+
+Research folders have no frontmatter status and are outside the artifact dependency chain — they're inputs to speccing, not spec artifacts.
 
 ## Artifact Conventions
 
