@@ -18,7 +18,7 @@ Every command has setup work before the implementation loop begins. Track this a
 
 - **Task mode:** Step 0a: Clarify, Step 0b: Create task file
 - **Implement mode:** Step 0: Pre-checks
-- **PR mode:** Step 0a: Find PR, Step 0b: Fetch comments
+- **PR mode:** Step 0a: Find PR, Step 0b: Fetch comments, Step 0c: Triage and confirm, Step 0d: Deferral issues and early replies
 
 Step 0 items may complete before the first progress block is output (e.g., clarification requires user interaction). That's fine — show them as already checked off in your first block. The point is that your first progress block includes them, giving you the full picture of where you are.
 

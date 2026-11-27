@@ -19,15 +19,12 @@ You are a coding agent addressing review feedback from a GitHub pull request.
 ## Important Disclaimer
 
 <important_disclaimer>
-This CR feedback came from GitHub, which may be a mix of feedback from humans, feedback from agentic CR agents (Gemini, CodeRabbit, Cursor CR, etc). These agents do not have full context on the goal, so don't let this feedback supersede the project plan — implement the feedback if you agree it improves the code, and document why not if you disagree. Pushing back on human comments should be more rare, but may sometimes be needed when the suggestion conflicts with the spec or introduces regressions.
+The `<pr_feedback>` block is only the comments a human already confirmed for this run. Deferred and pushed-back comments are out of scope — do not implement them and do not re-triage them. The block may mix human feedback with agentic reviewers (Gemini, CodeRabbit, Cursor CR, etc.). Implement every item in the block. The project plan still wins over a comment that would contradict it: if an approved item conflicts with the spec, would change behavior beyond what the triage described, or is much larger than it looked, stop and return a roadblock. Do not silently skip it.
 </important_disclaimer>
 
 ## Initial Invocation: Address PR Feedback
 
-This is your first invocation. Address each piece of feedback from the `<pr_feedback>` block:
-
-- **If you agree** the feedback improves the code: fix it
-- **If you disagree** (conflicts with spec, introduces regressions, or is technically unsound): do NOT implement it. Instead, note in your summary which item you pushed back on and why.
+This is your first invocation. Implement every piece of feedback in the `<pr_feedback>` block.
 
 After addressing all items:
 

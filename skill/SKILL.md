@@ -78,7 +78,7 @@ Research a topic on the web. Splits the topic into subtopics, runs a research su
 
 ### `/spec pr`
 
-Address review feedback from a GitHub pull request. Finds the PR for the current branch, fetches unresolved comments, spawns a coding agent to address them, runs the standard code review and triage, commits, pushes, and replies to each comment thread on GitHub.
+Address review feedback from a GitHub pull request. Takes an optional PR URL or number, otherwise the PR for the current branch. Fetches unresolved comments, triages each one as implement, defer, or push back (with a link to the original comment), and waits until you confirm. Then opens a GitHub issue for each deferred comment, implements the approved set through the standard code review and triage, commits, pushes, and replies on each thread.
 
 → Read [PR feedback command reference](references/cmd_pr.md)
 
